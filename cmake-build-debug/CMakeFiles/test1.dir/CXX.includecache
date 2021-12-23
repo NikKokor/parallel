@@ -1,0 +1,38 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/cygdrive/c/Users/nikko/CLionProjects/test1/barrier.h
+condition_variable
+-
+
+/cygdrive/c/Users/nikko/CLionProjects/test1/main.cpp
+thread
+-
+mutex
+-
+vector
+-
+iostream
+-
+omp.h
+-
+atomic
+-
+cstdlib
+-
+fstream
+-
+algorithm
+-
+cstring
+-
+type_traits
+-
+barrier.h
+/cygdrive/c/Users/nikko/CLionProjects/test1/barrier.h
+
