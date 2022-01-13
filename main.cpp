@@ -13,6 +13,9 @@
 
 #define STEPS 100000000
 #define CACHE_LINE 64u
+#define MIN 1
+#define MAX 300
+#define SEED 100
 #define A -1
 #define B 1
 
@@ -21,6 +24,10 @@ using namespace std;
 typedef double (*f_t)(double);
 
 typedef double (*E_t)(double, double, f_t);
+
+typedef double (*R_t)(unsigned*, size_t);
+
+typedef unsigned (*F_t)(unsigned);
 
 struct ExperimentResult {
     double result;
@@ -89,7 +96,7 @@ double integrateCrit(double a, double b, f_t f) {
 }
 
 double integrateMutex(double a, double b, f_t f) {
-    unsigned T = thread::hardware_concurrency();
+    unsigned T = get_num_threads();
     mutex mtx;
     vector<thread> threads;
     double result = 0, dx = (b - a) / STEPS;
@@ -156,6 +163,7 @@ double integrateArrAlign(double a, double b, f_t f) {
         {
             T = (unsigned int) omp_get_num_threads();
             accum = (partialSumT *) aligned_alloc(CACHE_LINE, T * sizeof(partialSumT));
+            memset(accum, 0, T*sizeof(*accum));
         }
 
         for (unsigned int i = t; i < STEPS; i += T) {
@@ -166,7 +174,6 @@ double integrateArrAlign(double a, double b, f_t f) {
     for (unsigned int i = 0; i < T; i++) {
         result += accum[i].val;
     }
-
     free(accum);
 
     return result * dx;
@@ -388,6 +395,190 @@ ExperimentResult runExperiment(I_t I) {
     return {result, t1 - t0};
 }
 
+ExperimentResult run_experiment_random(R_t R) {
+    size_t len = 100000;
+    unsigned arr[len];
+    unsigned seed = 100;
+
+    double t0 = omp_get_wtime();
+    double Res = R((unsigned *)&arr, len);
+    double t1 = omp_get_wtime();
+    return {Res, t1 - t0};
+}
+
+void show_experiment_result_Rand(R_t Rand) {
+    double T1;
+    uint64_t a = 6364136223846793005;
+    unsigned b = 1;
+
+    double dif = 0;
+    double avg = (MAX + MIN)/2;
+
+    printf("%10s\t%13s\t%13s\t%13s\t%13s\n", "Threads", "Result", "Avg", "Difference", "Acceleration");
+    for (unsigned T = 1; T <= omp_get_num_procs(); ++T) {
+        set_num_threads(T);
+        ExperimentResult R = run_experiment_random(Rand);
+        if (T == 1) {
+            T1 = R.time;
+        }
+        dif = avg - R.result;
+        printf("%10u\t%13g\t%13g\t%13g\t%13g\n", T, R.result, avg, dif, T1/R.time);
+    };
+}
+
+    //--------------rand----------------
+    double randomize_arr_single(unsigned *V, size_t n) {
+        uint64_t a = 6364136223846793005;
+        unsigned b = 1;
+        uint64_t prev = SEED;
+        uint64_t sum = 0;
+
+        for (unsigned i = 0; i < n; i++) {
+            uint64_t cur = a * prev + b;
+            V[i] = (cur % (MAX - MIN + 1)) + MIN;
+            prev = cur;
+            sum += V[i];
+        }
+
+        return (double) sum / (double) n;
+    }
+
+    uint64_t getA(unsigned size, uint64_t a) {
+        uint64_t res = 1;
+        for (unsigned i = 1; i <= size; i++) res = res * a;
+        return res;
+    }
+
+    uint64_t getB(unsigned size, uint64_t a) {
+        uint64_t *acc = new uint64_t(size);
+        uint64_t res = 1;
+        acc[0] = 1;
+        for (unsigned i = 1; i <= size; i++) {
+            for (unsigned j = 0; j < i; j++) {
+                acc[i] = acc[j] * a;
+            }
+            res += acc[i];
+        }
+        //free(acc);
+        return res;
+    }
+
+    double randomize_arr(unsigned *V, size_t n) {
+        uint64_t a = 6364136223846793005;
+        unsigned b = 1;
+        unsigned T;
+        uint64_t LUTA;
+        uint64_t LUTB;
+        uint64_t sum = 0;
+
+    #pragma omp parallel shared(V, T, LUTA, LUTB)
+        {
+            unsigned t = (unsigned) omp_get_thread_num();
+    #pragma omp single
+            {
+                T = (unsigned) get_num_threads();
+    //            LUTA = getLUTA(n, a);
+    //            LUTB = getLUTB(n, LUTA, b);
+                LUTA = getA(T, a);
+                LUTB = getB((T - 1), a)*b;
+            }
+            uint64_t prev = SEED;
+            uint64_t cur;
+
+            for (unsigned i=t; i<n; i += T){
+                if (i == t){
+                    cur = getA(i+1, a)*prev + getB(i, a) * b;
+                } else {
+                    cur = LUTA*prev + LUTB;
+                }
+    //            cur = LUTA[i+1]*prev + LUTB[i];
+                V[i] = (cur % (MAX - MIN + 1)) + MIN;
+                prev = cur;
+            }
+        }
+
+        for (unsigned i=0; i<n;i++)
+            sum += V[i];
+
+        return (double)sum/(double)n;
+    }
+
+    //----------fibonacci--------
+    unsigned Fibonacci(unsigned n){
+        if (n <= 2)
+            return 1;
+        return Fibonacci(n-1) + Fibonacci(n-2);
+    }
+
+unsigned Fibonacci_omp(unsigned n){
+    if (n <= 2)
+        return 1;
+    unsigned x1, x2;
+#pragma omp task
+    {
+        x1 = Fibonacci_omp(n-1);
+    };
+#pragma omp task
+    {
+        x2 = Fibonacci_omp(n-2);
+    };
+#pragma omp taskwait
+    return x1 + x2;
+}
+
+#include <future>
+std::future<unsigned> async_Fibonacci(unsigned n)
+{
+    if (n <= 2) {
+        auto fut = std::async([=]() { return (unsigned)1; });
+        return fut;
+    }
+    auto fut = std::async([=]() {
+        std::future<unsigned> a = async_Fibonacci(n - 1);
+        std::future<unsigned> b = async_Fibonacci(n - 2);
+        unsigned c = a.get() + b.get();
+        return c;
+    });
+    return fut;
+}
+
+unsigned Fibonacci_sch_omp(unsigned n){
+    unsigned acc [n];
+#pragma omp for schedule(dynamic)
+    for (int i=0; i<n; i++){
+        if (i<=1) { acc[i] = 1; }
+        else{
+            acc[i] = acc[i-1] + acc[i-2];
+        }
+    }
+    unsigned res = 0;
+    for (int i=0; i<n; i++){
+        res += acc[i];
+    }
+    return res;
+}
+
+ExperimentResult run_experiment_fib(F_t f) {
+    double t0 = omp_get_wtime();
+    double R = f(10);
+    double t1 = omp_get_wtime();
+    return {R, t1 - t0};
+}
+
+void show_experiment_result_Fib(F_t f) {
+    double T1;
+    printf("%10s\t%10s\t%10sms\t%13s\n", "Threads", "Result", "Time", "Acceleration");
+    for (unsigned T = 1; T <= omp_get_num_procs(); ++T) {
+        ExperimentResult R;
+        set_num_threads(T);
+        R = run_experiment_fib(f);
+        if (T == 1) {
+            T1 = R.time;
+        }
+        printf("%10u\t%10g\t%10g\t%13g\n", T, R.result, R.time, T1/R.time);
+    };
+}
+
 void showExperimentResults(I_t I, ofstream &file) {
     set_num_threads(1);
     ExperimentResult R = runExperiment(I);
@@ -453,24 +644,44 @@ int main() {
         } else
             _file.close();
     }
-    file << "integrateArrAlign" << endl;
-    showExperimentResults(integrateArrAlign, file);
+    //file << "integrateArrAlign" << endl;
+    //showExperimentResults(integrateArrAlign, file);
     //file << "integrateDefault" << endl;
     //showExperimentResults(integrateDefault, file);
-    file << "integrateCrit" << endl;
-    showExperimentResults(integrateCrit, file);
+    //file << "integrateCrit" << endl;
+    //showExperimentResults(integrateCrit, file);
     //file << "integrateMutex" << endl;
     //showExperimentResults(integrateMutex, file);
     //file << "integrateArr" << endl;
     //showExperimentResults(integrateArr, file);
-    file << "integrateReductionOMP" << endl;
-    showExperimentResults(integrateReductionOMP, file);
-    file << "integratePS" << endl;
-    showExperimentResults(integratePS, file);
+    //file << "integrateReductionOMP" << endl;
+    //showExperimentResults(integrateReductionOMP, file);
+    //file << "integratePS" << endl;
+    //showExperimentResults(integratePS, file);
     //file << "integrateAtomic" << endl;
     //showExperimentResults(integrateAtomic, file);
-    file << "integrateReduction" << endl;
-    showExperimentResults(integrateReduction, file);
+    //file << "integrateReduction" << endl;
+    //showExperimentResults(integrateReduction, file);
+
+    printf("Rand omp\n");
+    show_experiment_result_Rand(randomize_arr);
+
+//    unsigned param = 10;
+//    unsigned fibonacci = Fibonacci(param);
+//    cout << fibonacci << endl;
+//    unsigned fibonacci_omp = Fibonacci_omp(param);
+//    cout << fibonacci_omp << endl;
+//    unsigned fibonacci_sch_omp = Fibonacci_sch_omp(param);
+//    cout << fibonacci_sch_omp << endl;
+//    unsigned asynciBbonacci = async_Fibonacci(param).get();
+//    cout << asynciBbonacci << endl;
+//
+//    printf("Fib omp\n");
+//    show_experiment_result_Fib(Fibonacci_omp);
+//    printf("Fib schedule omp\n");
+//    show_experiment_result_Fib(Fibonacci_sch_omp);
+//    printf("Fib\n");
+//    show_experiment_result_Fib(Fibonacci);
 
     return 0;
 }
