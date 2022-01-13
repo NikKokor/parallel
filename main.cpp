@@ -37,7 +37,7 @@ struct partialSumT {
     alignas(64) double val;
 };
 
-#if defined(__GNUC__)
+#if defined(__GNUC__) && (__GNUC__) <= 11
 namespace std {
     constexpr std::size_t hardware_constructive_interference_size = 64u;
     constexpr std::size_t hardware_destructive_interference_size = 64u;
@@ -398,7 +398,7 @@ ExperimentResult runExperiment(I_t I) {
 //--------------rand----------------
 
 ExperimentResult run_experiment_random(R_t R) {
-    size_t len = 100000;
+    size_t len = 2000000;
     unsigned arr[len];
     unsigned seed = 100;
 
